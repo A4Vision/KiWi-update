@@ -2,6 +2,7 @@ package kiwi;
 
 import kiwi.ThreadData.PutData;
 import kiwi.ThreadData.ScanData;
+import util.Utils;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -17,20 +18,24 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 
 	/*************** Members ***************/
 	private final ConcurrentSkipListMap<K , Chunk<K, V>>	skiplist;		// skiplist of chunks for fast navigation
+	private LowerUpperBounds sizeBounds;
 	protected AtomicInteger 							version;		// current version to add items with
 	private final boolean								withScan;		// support scan operations or not (scans add thread-array)
 	private final ScanData[]		scanArray;
+	final boolean delayForLinearizabilityTesting;
 
 
 	/*************** Constructors ***************/
 	public KiWi(Chunk<K,V> head)
 	{
-		this(head, false);
+		this(head, false, new LowerUpperBounds(true));
 	}
 	
 	@SuppressWarnings("unchecked")
-	public KiWi(Chunk<K,V> head, boolean withScan)
+	public KiWi(Chunk<K,V> head, boolean withScan, LowerUpperBounds sizeBounds)
 	{
+		this.sizeBounds = sizeBounds;
+
 		this.skiplist = new ConcurrentSkipListMap<>();
 		this.version = new AtomicInteger(2);	// first version is 2 - since 0 means NONE, and -1 means FREEZE
 
@@ -45,6 +50,8 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 			//this.threadArray = null;
 			this.scanArray = null;
 		}
+		delayForLinearizabilityTesting = head.delayForLinearizabilityTesting;
+
 	}
 
 	/*************** Methods ***************/
@@ -53,7 +60,15 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 	{
 		return (PAD_SIZE + idx*PAD_SIZE);
 	}
-	
+
+	public int lowerSizeBound(){
+		return sizeBounds.getLowerBound();
+	}
+
+	public int upperSizeBound(){
+		return sizeBounds.getUpperBound();
+	}
+
 	public V get(K key)
 	{
 		// find chunk matching key
@@ -63,27 +78,33 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 		// help concurrent put operations (helpPut) set a version
 		PutData<K,V> pd = null;
 		pd = c.helpPutInGet(version.get(), key);
+//		if(pd != null) {
+//			System.out.println("pd in get()");
+//			c.printData(pd.orderIndex);
+//		}
 
+//		if(Math.random() < 0.5){
+//			c.printLinkedList();
+//		}
 		// find item matching key inside chunk
 		return c.find(key, pd);
 	}
 
-	public void put(K key, V val)
-	{
+	public void put(K key, V val){
 		// find chunk matching key
 		Chunk<K,V> c = skiplist.floorEntry(key).getValue();
 		
 		// repeat until put operation is successful
-		while (true)
-		{
+		while (true) {
+//			Utils.randomDelay(delayForLinearizabilityTesting, 1);
 			// the chunk we have might have been in part of split so not accurate
 			// we need to iterate the chunks to find the correct chunk following it
 			c = iterateChunks(c, key);
-			
+
 			// if chunk is infant chunk (has a parent), we can't add to it
 			// we need to help finish compact for its parent first, then proceed
 			{
-				Chunk<K,V> parent = c.creator;
+				Chunk<K, V> parent = c.creator;
 				if (parent != null) {
 					if (rebalance(parent) == null)
 						return;
@@ -93,28 +114,33 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 			// allocate space in chunk for key & value
 			// this also writes key&val into the allocated space
 			int oi = c.allocate(key, val);
-			
+//			Utils.randomDelay(delayForLinearizabilityTesting, 1);
+
 			// if failed - chunk is full, compact it & retry
-			if (oi < 0)
-			{
+			if (oi < 0) {
 				c = rebalance(c);
 				if (c == null)
 					return;
 				continue;
 			}
-			
-			if (withScan)
-			{
+			// Before publishing, do a speculative add/remove - go on the safe side.
+			//
+			sizeBounds.startInsert(val == null);
+			if (withScan) {
+//				Utils.randomDelay(delayForLinearizabilityTesting, 1);
 				// publish put operation in thread array
 				// publishing BEFORE setting the version so that other operations can see our value and help
 				// this is in order to prevent us from adding an item with an older version that might be missed by others (scan/get)
+
 				c.publishPut(new PutData<>(c, oi));
 
 
-				if(c.isFreezed())
-				{
+				if (c.isFreezed()) {
 					// if succeeded to freeze item -- it is not accessible, need to reinsert it in rebalanced chunk
-					if(c.tryFreezeItem(oi)) {
+					if (c.tryFreezeItem(oi)) {
+						// Undo speculative add/remove. Version was NONE, it wasn't seen by anyone.
+						sizeBounds.undoPut(val == null);
+						Utils.randomDelay(delayForLinearizabilityTesting, 1);
 						c.publishPut(null);
 						c = rebalance(c);
 
@@ -122,34 +148,42 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 					}
 				}
 			}
-			
+			// Slow put after publishing version - raise the chance that a parallel Scan will help this put.
+			Utils.randomDelay(delayForLinearizabilityTesting, 10);
 			// try to update the version to current version, but use whatever version is successfuly set
 			// reading & setting version AFTER publishing ensures that anyone who sees this put op has
 			// a version which is at least the version we're setting, or is otherwise setting the version itself
 			int myVersion = c.setVersion(oi, this.version.get());
-			
+
+			// Slow put after setting version - raise the chance that a parallel Put with higher orderIndex,
+			// will run addToList() before us.
+			Utils.randomDelay(delayForLinearizabilityTesting, 20);
 			// if chunk is frozen, clear published data, compact it and retry
 			// (when freezing, version is set to FREEZE)
-			if (myVersion == Chunk.FREEZE_VERSION)
-			{
+			if (myVersion == Chunk.FREEZE_VERSION) {
+				// Undo speculative add/remove. Version was NONE, it wasn't seen by anyone.
+				sizeBounds.undoPut(val == null);
 				// clear thread-array item if needed
 				c.publishPut(null);
+				Utils.randomDelay(delayForLinearizabilityTesting, 1);
 				c = rebalance(c);
 				continue;
 			}
-			
 			// allocation is done (and published) and has a version
 			// all that is left is to insert it into the chunk's linked list
+
 			c.addToList(oi, key);
-			
+			Utils.randomDelay(delayForLinearizabilityTesting, 1);
 			// delete operation from thread array - and done
 			c.publishPut(null);
 
-			if(shouldRebalance(c))
+			if (shouldRebalance(c)){
 				rebalance(c);
+			}
 
 			break;
 		}
+//		System.out.format("done put %d %d tid=%d\n", (Integer)key, (Integer)val, KiWi.threadId());
 	}
 
 	private boolean shouldRebalance(Chunk<K, V> c) {
@@ -220,7 +254,29 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 		return;
 	}
 
-	public int scan(V[] result, K min, K max) {
+	/**
+	 * Remove nulls from the given array, return new size of the array.
+	 * Keeps order of given array.
+	 * @param arrValues
+	 * @param size
+	 * @return Size of array, after removing nulls.
+	 */
+	private int removeNulls(V[] arrValues, K[] arrKeys, boolean clearKeys, int size){
+		int nullCount = 0;
+		for(int i = 0; i < size; ++i){
+			if(arrValues[i] != null){
+				arrValues[i - nullCount] = arrValues[i];
+				if(clearKeys){
+					arrKeys[i - nullCount] = arrKeys[i];
+				}
+			}else{
+				nullCount++;
+			}
+		}
+		return size - nullCount;
+	}
+
+	public int scan(V[] resultValues, K[] resultKeys, boolean addKeys, K min, K max) {
 		// get current version and increment version (atomically) for this scan
 		// all items beyond my version are ignored by this scan
 		// the newVersion() method is used to ensure my version is published correctly,
@@ -243,15 +299,14 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 			// (so old put() op doesn't suddently set an old version this scan() needs to see,
 			//  but after the scan() passed it)
 			SortedMap<K,PutData<K,V>> items = c.helpPutInScan(myVer, min, max);
-
-			itemsCount += c.copyValues(result, itemsCount, myVer, min, max, items);
+			itemsCount += c.copyRange(resultValues, resultKeys, addKeys, itemsCount, myVer, min, max, items);
 			c = c.next.getReference();
 		}
-
+		int noNullsCount = removeNulls(resultValues, resultKeys, addKeys, itemsCount);
 		// remove scan from scan array
 		publishScan(null);
 
-		return itemsCount;
+		return noNullsCount;
 	}
 
 	@Override
@@ -387,6 +442,9 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 
 	private Chunk<K,V> rebalance(Chunk<K,V> chunk)
 	{
+
+//		if(debugCurrentInsert != null)
+//			(new Throwable("rebalance " + debugCurrentInsert.toString())).printStackTrace();
 		Rebalancer<K,V> rebalancer = new Rebalancer<>(chunk, this);
 
 		rebalancer = rebalancer.engageChunks();
@@ -519,6 +577,11 @@ public class KiWi<K extends Comparable<? super K>, V> implements ChunkIterator<K
 
 		lastChild.next.compareAndSet(null, nextToLast, false, false);
 	}
+
+	public static int threadId(){
+		return (int) (Thread.currentThread().getId() % MAX_THREADS);
+	}
+
 
 	/** publish data into thread array - use null to clear **/
 	private void publishScan(ScanData data)

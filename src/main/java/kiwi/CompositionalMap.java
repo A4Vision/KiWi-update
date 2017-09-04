@@ -33,6 +33,6 @@ public interface CompositionalMap<K, V> extends Map<K, V> {
 	
 	public int size();
 	
-	public int getRange(K[] result, K min, K max);
+	public int getRange(V[] result, K[] resultKeys, boolean addKeys, K min, K max);
 }
 

@@ -2,6 +2,7 @@ package kiwi;
 
 import kiwi.ThreadData.PutData;
 import sun.misc.Unsafe;
+import util.Utils;
 
 import java.lang.reflect.Constructor;
 import java.util.List;
@@ -43,7 +44,9 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 	protected final Object[]							dataArray;
 
 	private final AtomicInteger					orderIndex;	// points to next free index of order array
-	private final AtomicInteger					dataIndex;	// points to next free index of data array 
+	private final AtomicInteger					dataIndex;	// points to next free index of data array
+	protected final boolean delayForLinearizabilityTesting; // Whether to delay in some critical locations
+																 // to uncover linearizablity bugs.
 
 	public K									minKey;		// minimal key that can be put in this chunk
 
@@ -61,6 +64,8 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 
 	private PutData<K,V>[] putArray;
 	private static final int PAD_SIZE = 100;
+
+	protected LowerUpperBounds sizeBounds;
 
 	public final int getOrderIndexSerial()
 	{
@@ -80,7 +85,7 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 		return cas(oi,OFFSET_VERSION, NONE, FREEZE_VERSION);
 	}
 
-	public abstract int copyValues(Object[] result, final int idx, final int myVer, final K min, final K max, final SortedMap<K,PutData<K,V>> items);
+	public abstract int copyRange(Object[] resultValues, Object[] resultKeys, boolean addKeys, final int idx, final int myVer, final K min, final K max, final SortedMap<K,PutData<K,V>> items);
 
 	/** this method is used by scan operations (ONLY) to help pending put operations set a version
 	 * @return sorted map of items matching key range of any currently-pending put operation */
@@ -131,6 +136,7 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 				else if (itemVer == currVer)
 				{
 					// same chunk & version but items's index is larger - don't replace
+					// TODO: correct this to compare data index instead of order index.
 					if (item.orderIndex > currPut.orderIndex)
 						continue;
 				}
@@ -274,7 +280,12 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 		}
 	}
 
-	/***
+	public abstract void printLinkedList();
+
+    public abstract void printData(int orderIndex);
+
+
+    /***
 	 * The class contains approximate information about chunk utilization.
 	 */
 	public class Statistics
@@ -324,32 +335,38 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 	 * @param minKey	minimal key to be placed in chunk, used by KiWi
 	 * @param dataItemSize	expected avg. size (in BYTES!) of items in data-array. can be an estimate
 	 */
-	public Chunk(K minKey, int dataItemSize, Chunk<K,V> creator)
-	{
+    public Chunk(K minKey, int dataItemSize, Chunk<K,V> creator, boolean delayForLinearizabilityTesting){
+        this(minKey, dataItemSize, creator, delayForLinearizabilityTesting, new LowerUpperBounds(true));
+    }
 
-		// allocate space for head item (only "next", starts pointing to NONE==0)
-		this.orderIndex = new AtomicInteger(FIRST_ITEM);
-		this.dataIndex = new AtomicInteger(FIRST_ITEM);	// index 0 in data is "NONE"
-		this.orderIndexSerial = FIRST_ITEM;
-		this.dataIndexSerial = FIRST_ITEM;
+	public Chunk(K minKey, int dataItemSize, Chunk<K,V> creator, boolean delayForLinearizabilityTesting,
+                 LowerUpperBounds sizeBounds) {
 
-		// allocate space for MAX_ITEMS, and add FIRST_ITEM (size of head) for order array
-		//this.orderArray = new AtomicIntegerArray(MAX_ITEMS * ORDER_SIZE + FIRST_ITEM);	// initialized to 0, i.e., NONE
-		this.orderArray = new int[MAX_ITEMS * ORDER_SIZE + FIRST_ITEM];
-		this.dataArray = new Object[MAX_ITEMS+ 1];
-		this.putArray = new PutData[KiWi.MAX_THREADS * (PAD_SIZE + 1)];
+        // allocate space for head item (only "next", starts pointing to NONE==0)
+        this.orderIndex = new AtomicInteger(FIRST_ITEM);
+        this.dataIndex = new AtomicInteger(FIRST_ITEM);    // index 0 in data is "NONE"
+        this.orderIndexSerial = FIRST_ITEM;
+        this.dataIndexSerial = FIRST_ITEM;
 
-		this.children = new AtomicReference<>(null);
+        // allocate space for MAX_ITEMS, and add FIRST_ITEM (size of head) for order array
+        //this.orderArray = new AtomicIntegerArray(MAX_ITEMS * ORDER_SIZE + FIRST_ITEM);	// initialized to 0, i.e., NONE
+        this.orderArray = new int[MAX_ITEMS * ORDER_SIZE + FIRST_ITEM];
+        this.dataArray = new Object[MAX_ITEMS + 1];
+        this.putArray = new PutData[KiWi.MAX_THREADS * (PAD_SIZE + 1)];
 
-		this.next = new AtomicMarkableReference<>(null, false);
-		this.minKey = minKey;
-		this.creator = creator;
-		this.sortedCount = 0;		// no sorted items at first
-		this.rebalancer = new AtomicReference<Rebalancer<K,V>>(null); // to be updated on rebalance
-		this.statistics = new Statistics();
+        this.children = new AtomicReference<>(null);
 
-		// TODO allocate space for minKey inside chunk (pointed by skiplist)?
-	}
+        this.next = new AtomicMarkableReference<>(null, false);
+        this.minKey = minKey;
+        this.creator = creator;
+        this.sortedCount = 0;        // no sorted items at first
+        this.rebalancer = new AtomicReference<Rebalancer<K, V>>(null); // to be updated on rebalance
+        this.statistics = new Statistics();
+
+        this.delayForLinearizabilityTesting = delayForLinearizabilityTesting;
+        this.sizeBounds = sizeBounds;
+        // TODO allocate space for minKey inside chunk (pointed by skiplist)?
+    }
 	
 	/** static constructor - access and create a new instance of Unsafe */
 	static
@@ -650,7 +667,7 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 				if (version == NONE)
 				{
 					// set version to FREEZE so put op knows to restart
-					// if succeded - item will not be in this chunk, we can continue to next item
+					// if succeeded - item will not be in this chunk, we can continue to next item
 					if ((cas(idx, OFFSET_VERSION, NONE, FREEZE_VERSION)) ||
 							(getVersion(idx) == FREEZE_VERSION))
 					{
@@ -754,16 +771,20 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 			
 			// if item's key is larger - we've exceeded our key
 			// it's not in chunk - no need to search further
-			if (cmp > 0)
-				return null;
+			if (cmp > 0){
+			    break;
+            }
 			// if keys are equal - we've found the item
-			else if (cmp == 0)
-				return chooseNewer(curr, item);
+			else if (cmp == 0) {
+                return chooseNewer(curr, item);
+            }
 			// otherwise- proceed to next item
 			else
 				curr = get(curr, OFFSET_NEXT);
 		}
-		
+        if(item != null && get(item.orderIndex, OFFSET_KEY) == (Integer)key){
+            return getData(item.orderIndex);
+        }
 		return null;
 	}
 	
@@ -785,9 +806,17 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 			return getData(item);
 		else if (dataVer > itemVer)
 			return getData(pd.orderIndex);
-		else
-			// same version - return latest item by order in order-array
-			return getData(Math.max(item, pd.orderIndex));
+		else {
+            // same version - return latest item by order in order-array
+            // Correction - return latest item by order in data array.
+            int d1 = get(item, OFFSET_DATA);
+            int d2 = get(pd.orderIndex, OFFSET_DATA);
+            if(Math.abs(d1) > Math.abs(d2)){
+                return getData(item);
+            }else{
+                return getData(pd.orderIndex);
+            }
+        }
 	}
 	
 	/** add the given item (allocated in this chunk) to the chunk's linked list
@@ -797,40 +826,36 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 	{
 		int prev, curr;
 		int ancor = -1;
-
+		boolean dataIsNull = (getData(orderIndex) == null);
 		// retry adding to list until successful
 		// no items are removed from list - so we don't need to restart on failures
 		// so if we CAS some node's next and fail, we can continue from it
 		// --retry so long as version is negative (which means item isn't in linked-list)
-		while (get(orderIndex, OFFSET_VERSION) < 0)
-		{
+		while (get(orderIndex, OFFSET_VERSION) < 0) {
 			// remember next pointer in entry we're trying to add
 			int savedNext = get(orderIndex, OFFSET_NEXT);
-			
 			 // start iterating from quickly-found node (by binary search) in sorted part of order-array
 			if(ancor == -1) ancor = binaryFind(key);
 			curr = ancor;
-
 			int cmp = -1;
-
+			boolean encounteredHigherVersion = false;
 			// iterate items until key's position is found
-			while (true)
-			{
+			while(true){
+				Utils.randomDelay(delayForLinearizabilityTesting, 1);
 				prev = curr;
 				curr = get(prev, OFFSET_NEXT);	// index of next item in list
-				
 				// if no item, done searching - add to end of list
 				if (curr == NONE)
 					break;
 				
 				// if found item we're trying to insert - already inserted by someone else, so we're done
-				if (curr == orderIndex)
-					return;
-					//TODO also update version to positive?
-				
+				if (curr == orderIndex) {
+                    return;
+                }
+
 				// compare current item's key to ours
 				cmp = readKey(curr).compareTo(key);
-				
+
 				// if current item's key is larger, done searching - add between prev and curr
 				if (cmp > 0)
 					break;
@@ -845,47 +870,83 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 
 					int verMine = getVersion(orderIndex);
 					int verNext = getVersion(curr);
-					
 					// if current item's version is smaller, done searching - larger versions are first in list
-					if (verNext < verMine)
-						break;
-					
-					// same versions but i'm later in chunk's array - i'm first in list
-					if (verNext == verMine)
-					{
+					if(verNext < verMine) {
+                        break;
+                    }else if(verNext > verMine){
+                        // if verNext > verMine, we still MUST insert the element,
+                        // just in case some ongoing scan might need it.
+                        encounteredHigherVersion = true;
+                    }else if (verNext == verMine) {
+                        // same versions but i'm later in chunk's array - i'm first in list
 						int newDataIdx = get(orderIndex, OFFSET_DATA);
 						int oldDataIdx = get(curr, OFFSET_DATA);
 
 						while((Math.abs(newDataIdx) > Math.abs(oldDataIdx)) && !cas(curr,OFFSET_DATA,oldDataIdx, newDataIdx)) {
 							oldDataIdx = get(curr,OFFSET_DATA);
 						}
+//                        System.out.format("replacing tid=%d\n", KiWi.threadId());
 
+                        { // Update size bounds.
+                            if (!sizeBounds.isFake && Math.abs(newDataIdx) > Math.abs(oldDataIdx)) {
+                                // cas happened.
+                                if(encounteredHigherVersion) {
+                                    sizeBounds.undoPut(null == getData(orderIndex));
+                                }else {// We need synchronized access to prev.next, due to JavaMemoryModel.
+                                    if (cas(prev, OFFSET_NEXT, curr, curr)) {
+                                        // prev still points to curr - we are certain that this is the highest version.
+                                        sizeBounds.finishInsert(newDataIdx < 0, oldDataIdx < 0);
+                                    } else if (!encounteredHigherVersion) {
+                                        System.out.println("failed to update size bounds - overwrite");
+                                    }
+                                }
+                            }
+
+                        }
 						return;
 					}
 				}
 			}
 
-			if(savedNext == CANCELED_REMOVE_NEXT) return;
-			if(cmp != 0 && savedNext == NONE && get(orderIndex, OFFSET_DATA) < 0)
-			{
-				if(cas(orderIndex,OFFSET_NEXT,savedNext, CANCELED_REMOVE_NEXT))
-					return;
-				else
-					continue;
-			}
-
 			// try to CAS update my next to current item ("curr" variable)
 			// using CAS from saved next since someone else might help us
-			// and we need to avoid race conditions with other put ops and helpers
-			if (cas(orderIndex, OFFSET_NEXT, savedNext, curr))
-			{
+			if (cas(orderIndex, OFFSET_NEXT, savedNext, curr)) {
+				Utils.randomDelay(delayForLinearizabilityTesting, 1);
 				// try to CAS curr's next to point from "next" to me
 				// if successful - we're done, exit loop. Otherwise retry (return to "while true" loop)
-				if (cas(prev, OFFSET_NEXT, curr, orderIndex))
-				{
+
+                // For updating size bounds.
+                int newDataIdx = get(orderIndex, OFFSET_DATA);  // sizeBounds
+                // The key is new, unless encounteredHigherVersion, or cmp == 0.
+                int oldDataIdx = -1;
+                if (!encounteredHigherVersion && cmp == 0){
+                    oldDataIdx = get(curr, OFFSET_DATA);
+                }
+                if(cmp != 0) {
+                    assert ((curr == NONE) == (cmp < 0));
+                }
+
+                if (cas(prev, OFFSET_NEXT, curr, orderIndex)){
+					Utils.randomDelay(delayForLinearizabilityTesting, 10);
 					// if some CAS failed we restart, if both successful - we're done
 					// update version to positive (getVersion() always returns positive number) to mark item is linked
 					set(orderIndex, OFFSET_VERSION, getVersion(orderIndex));
+//                    System.out.format("inserting tid=%d\n", KiWi.threadId());
+					// We just added an element.
+
+                    { // Update size bounds.
+                        if(!sizeBounds.isFake) {
+                            if (encounteredHigherVersion) {
+                                sizeBounds.undoPut(dataIsNull);
+                            } else if ((curr == NONE || cmp > 0) || (cmp == 0 && cas(curr, OFFSET_DATA, oldDataIdx, oldDataIdx))) {
+                                    // We need synchronized access to oldDataIdx, due to JavaMemoryModel.
+                                    // The dataIdx of next did not change.
+                                    sizeBounds.finishInsert(newDataIdx < 0, oldDataIdx < 0);
+                            } else if (cmp == 0) {
+                                System.out.println("failed to update size bounds - new version");
+                            }
+                        }
+                    }
 
 					// if adding version for existing key -- update duplicates statistics
 					if(cmp == 0)
@@ -1144,6 +1205,9 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 
 		// increment data array to get new index in it
 		int di = dataIndex.getAndIncrement();
+		// Assaf: My change - orderIndex and dataIndex should be the same, so entries may be ordered
+        //        by dataIndex.
+		di = (oi + (ORDER_SIZE - FIRST_ITEM)) / ORDER_SIZE;
 		if (di >= dataArray.length)
 			return -1;
 
@@ -1154,7 +1218,6 @@ public abstract class Chunk<K extends Comparable<? super K>,V>
 		di = dataSize > 0? di : -di;
 
 		set(oi, OFFSET_DATA, di);
-
 		// return index of allocated order-array item
 		return oi;
 	}

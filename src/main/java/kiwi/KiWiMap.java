@@ -1,10 +1,11 @@
 package kiwi;
 
-import java.util.Collection;
-import java.util.Map;
-import java.util.Set;
+import java.io.IOException;
+import java.util.*;
 
+import linearizability.*;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
+import util.Utils;
 
 /**
  * Created by msulamy on 7/27/15.
@@ -16,15 +17,27 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
 	/***************	Members				***************/
 	public static boolean			SupportScan = true;
     public static int               RebalanceSize = 2;
+    private LowerUpperBounds sizeBounds; // Bounds the map size from below and from above.
 
-	public KiWi<Integer,Integer>	kiwi;
-    
+    public KiWi<Integer,Integer>	kiwi;
+	private HistoryLogger historyLogger;
+
     /***************	Constructors		***************/
-    public KiWiMap()
+    public KiWiMap(){
+        this(false, false);
+    }
+
+    public KiWiMap(boolean logOperations, boolean calculateSizeBounds)
     {
-    	ChunkInt.initPool();
+        sizeBounds = new LowerUpperBounds(!calculateSizeBounds);
+    	ChunkInt.initPool(logOperations);
         KiWi.RebalanceSize = RebalanceSize;
-    	this.kiwi = new KiWi<>(new ChunkInt(), SupportScan);
+    	this.kiwi = new KiWi<>(new ChunkInt(logOperations, sizeBounds), SupportScan, sizeBounds);
+    	if(logOperations) {
+            historyLogger = new HistoryLogger();
+        }else{
+    	    historyLogger = null;
+        }
     }
     
     /***************	Methods				***************/
@@ -33,7 +46,8 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
     @Override
     public Integer putIfAbsent(Integer k, Integer v)
     {
-    	kiwi.put(k, v);
+
+        kiwi.put(k, v);
         return null;	// can implement return value but not necessary
     }
     
@@ -54,13 +68,30 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
     @Override
     public Integer get(Object o)
     {
-    	return kiwi.get((Integer)o);
+        if(historyLogger != null) {
+            Get get = new Get((Integer) o, null);
+            TimedOperation timedOperation = new TimedOperation(get);
+            Integer res = kiwi.get((Integer) o);
+            timedOperation.setEnd();
+            get.setRetval(res);
+            historyLogger.logOperation(timedOperation);
+            return res;
+        }else{
+            return kiwi.get((Integer) o);
+        }
     }
 
     @Override
     public Integer put(Integer k, Integer v)
     {
-    	kiwi.put(k, v);
+        if(historyLogger != null) {
+            TimedOperation timedOperation = new TimedOperation(new Put(k, v));
+            kiwi.put(k, v);
+            timedOperation.setEnd();
+            historyLogger.logOperation(timedOperation);
+        }else{
+            kiwi.put(k, v);
+        }
         return null;
     }
 
@@ -68,25 +99,32 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
     @Override
     public Integer remove(Object o)
     {
-    	kiwi.put((Integer)o, null);
+        if(historyLogger != null) {
+            TimedOperation timedOperation = new TimedOperation(new Discard((Integer)o));
+            kiwi.put((Integer)o, null);
+            timedOperation.setEnd();
+            historyLogger.logOperation(timedOperation);
+        }else{
+            kiwi.put((Integer)o, null);
+        }
         return null;
     }
 
     @Override
-    public int getRange(Integer[] result, Integer min, Integer max)
+    public int getRange(Integer[] resultValues, Integer[] resultKeys, boolean addKeys,
+                        Integer min, Integer max)
     {
-        return kiwi.scan(result,min,max);
-/*
-    	Iterator<Integer> iter = kiwi.scan(min, max);
-    	int i;
-    	
-    	for (i = 0; (iter.hasNext()) && (i < result.length); ++i)
-    	{
-    		result[i] = iter.next();
-    	}
-    	
-    	return i;
-*/
+        if(historyLogger != null){
+            Scan scan = new Scan(min, max, null);
+            TimedOperation timedOperation = new TimedOperation(scan);
+            int res = kiwi.scan(resultValues, resultKeys, addKeys, min,max);
+            timedOperation.setEnd();
+            scan.setRetval(Utils.convertArrayToList(resultValues, res));
+            historyLogger.logOperation(timedOperation);
+            return res;
+        }else{
+            return kiwi.scan(resultValues, resultKeys, addKeys, min, max);
+        }
     }
     
     /** same as put(key,val) for each item */
@@ -95,8 +133,8 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
     {
     	for (Integer key : map.keySet())
     	{
-    		kiwi.put(key, map.get(key));
-    	}
+                kiwi.put(key, map.get(key));
+        }
     }
     
     /** Same as get(key) != null **/
@@ -111,8 +149,9 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
     public void clear()
     {
     	//this.kiwi.debugPrint();
-    	ChunkInt.initPool();
-    	this.kiwi = new KiWi<>(new ChunkInt(), SupportScan);
+    	ChunkInt.initPool(historyLogger != null);
+    	sizeBounds = new LowerUpperBounds(sizeBounds.isFake);
+    	this.kiwi = new KiWi<>(new ChunkInt(historyLogger != null, sizeBounds), SupportScan, sizeBounds);
     }
 
     /** Not implemented - can scan all & return keys **/
@@ -167,4 +206,41 @@ public class KiWiMap implements CompositionalMap<Integer,Integer>
     {
         kiwi.calcChunkStatistics();
     }
+
+    /** Upper bound size */
+    public int sizeUpperBound()
+    {
+        if(historyLogger != null) {
+            SizeUpperBound bound = new SizeUpperBound(null);
+            TimedOperation timedOperation = new TimedOperation(bound);
+            int res = kiwi.upperSizeBound();
+            timedOperation.setEnd();
+            bound.setRetval(res);
+            historyLogger.logOperation(timedOperation);
+            return res;
+        }else{
+            return kiwi.upperSizeBound();
+        }
+    }
+
+    /** Upper bound size */
+    public int sizeLowerBound()
+    {
+        if(historyLogger != null) {
+            SizeLowerBound bound = new SizeLowerBound(null);
+            TimedOperation timedOperation = new TimedOperation(bound);
+            int res = kiwi.lowerSizeBound();
+            timedOperation.setEnd();
+            bound.setRetval(res);
+            historyLogger.logOperation(timedOperation);
+            return res;
+        }else{
+            return kiwi.lowerSizeBound();
+        }
+    }
+
+    public void write(String dir) throws IOException{
+        historyLogger.write(dir);
+    }
 }
+
