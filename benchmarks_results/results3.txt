@@ -1,0 +1,128 @@
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=32 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.400878, 2.2740688, 1.978502, 2.5555852, 2.0931656]
+scans throughput[4.1305284, 8.1040768, 6.3798752, 3.3502002, 16.476848]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=44 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=44 preFillAmount=1000000 mapNumber=3 experimentIndex=1 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=16 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.0618228, 1.987732, 1.918078, 1.9779952, 2.1521044]
+scans throughput[14.3796048, 13.00994, 9.5838176, 17.2673968, 12.7931096]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=32 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.7900232, 2.4537992, 2.5816976, 2.5555364, 2.450846]
+scans throughput[0.4946224, 1.9567228, 5.8061488, 1.379758, 3.2933642]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=44 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.6456296, 2.9081112, 2.5714452, 3.1791272, 2.5741276]
+scans throughput[5.0509424, 8.2206672, 6.1671556, 2.7721494, 4.101968]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=44 preFillAmount=1000000 mapNumber=3 experimentIndex=1 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[16.2434448, 1.8708792, 8.1646592, 1.872806, 11.1626512]
+scans throughput[0.0, 0.0, 0.0, 0.0, 0.0]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=16 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.019242, 2.049584, 1.8912824, 1.9849756, 2.1155928]
+scans throughput[13.6649456, 15.622544, 15.3091776, 13.3970816, 13.834904]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=32 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.6538796, 2.2241736, 2.504644, 2.8116032, 2.6584816]
+scans throughput[5.8818736, 3.6731872, 2.6530602, 2.3649364, 6.068948]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=44 preFillAmount=1000000 mapNumber=1 experimentIndex=3 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[2.9662176, 3.0830704, 2.5533448, 2.9986544, 3.04196]
+scans throughput[3.9738424, 5.6475328, 28.679456, 3.0465274, 3.2737372]
+parameters:
+	itemsRange threadsAmount preFillAmount mapNumber experimentIndex experimentsCount testDurationSeconds warmUpSeconds
+8
+itemsRange=2000000 threadsAmount=44 preFillAmount=1000000 mapNumber=3 experimentIndex=1 experimentsCount=5 testDurationSeconds=5.00 warmUpSeconds=3.00
+warming up - wait for JIT compiler...
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+sleeping
+operations throughput[14.6943648, 2.0414544, 11.6918088, 2.073588, 8.3410272]
+scans throughput[0.0, 0.0, 0.0, 0.0, 0.0]
